@@ -304,6 +304,7 @@ function EAB.VisibilityCompat.Copy(dst, src, dstNoGroupModes)
     local mode = EAB.VisibilityCompat.Normalize(src)
     EAB.VisibilityCompat.ApplyMode(dst, mode)
 
+    dst.mouseoverRestAlpha = src.mouseoverRestAlpha
     if mode == "mouseover" then
         dst._savedBarAlpha = src._savedBarAlpha or src.mouseoverAlpha or 1
         dst.mouseoverAlpha = 0
@@ -524,6 +525,7 @@ for _, info in ipairs(BAR_CONFIG) do
         buttonHeight = 0,
         mouseoverEnabled = false,
         mouseoverAlpha = 1,
+        mouseoverRestAlpha = 0,
         combatShowEnabled = false,
         combatHideEnabled = false,
         housingHideEnabled = false,
@@ -611,6 +613,7 @@ for _, info in ipairs(EXTRA_BARS) do
     defaults.profile.bars[info.key] = {
         mouseoverEnabled = false,
         mouseoverAlpha = 1,
+        mouseoverRestAlpha = 0,
         combatShowEnabled = false,
         combatHideEnabled = false,
         housingHideEnabled = false,
@@ -7396,12 +7399,19 @@ function EAB:ApplyBarOpacity(barKey)
     if not s then return end
     local frame = barFrames[barKey]
     if not frame then return end
-    -- In mouseover mode the hover system owns alpha (0 when unhovered,
-    -- mouseoverAlpha when hovered). Don't override it here.
-    if not s.mouseoverEnabled then
-        frame:SetAlpha(s.mouseoverAlpha or 1)
-        if barKey == "MainBar" then SyncPagingAlpha(s.mouseoverAlpha or 1) end
+    -- In mouseover mode the hover system owns alpha (resting when unhovered,
+    -- mouseoverAlpha when hovered), so only repaint the RESTING value here, and
+    -- only while the cursor is away -- otherwise a slider drag yanks a hovered bar.
+    if s.mouseoverEnabled then
+        if frame:IsMouseOver() then return end
+        local resting = EAB_VTABLE.Hover.RestingAlpha(barKey, s)
+        StopFade(frame)
+        frame:SetAlpha(resting)
+        if barKey == "MainBar" then SyncPagingAlpha(resting) end
+        return
     end
+    frame:SetAlpha(s.mouseoverAlpha or 1)
+    if barKey == "MainBar" then SyncPagingAlpha(s.mouseoverAlpha or 1) end
 end
 
 function EAB:BarSupportsOrientation(barKey)
@@ -8715,7 +8725,9 @@ function EAB_VTABLE.Hover.RestingAlpha(barKey, s)
     else
         wantsHover = s.mouseoverEnabled
     end
-    if wantsHover then return 0, true end
+    -- Rest alpha while hover-gated: 0 = classic hidden-until-hover,
+    -- >0 = dimmed-until-hover. Defaults to 0 so existing profiles are unchanged.
+    if wantsHover then return s.mouseoverRestAlpha or 0, true end
     return s._savedBarAlpha or s.mouseoverAlpha or 1, false
 end
 
@@ -9744,6 +9756,7 @@ end
 do
 local MYSLOT_VIS_FIELDS = {
     "barVisibility", "alwaysHidden", "mouseoverEnabled", "mouseoverAlpha",
+    "mouseoverRestAlpha",
     "_savedBarAlpha", "combatShowEnabled", "combatHideEnabled", "alwaysShowButtons",
     -- An applied Visibility override REPLACES the whole setting (a "never"
     -- would keep the bar hidden through the import); captured, force-cleared
@@ -9837,6 +9850,7 @@ function EAB:SetMyslotForceShow(on)
                 -- this swap exists to show. The backup holds both real
                 -- values; restore puts them back untouched.
                 s.mouseoverAlpha = 1
+                s.mouseoverRestAlpha = nil
                 s._savedBarAlpha = nil
                 s.combatShowEnabled = false
                 s.combatHideEnabled = false

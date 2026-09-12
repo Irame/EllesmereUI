@@ -1196,6 +1196,7 @@ initFrame:SetScript("OnEvent", function(self)
         dst.alwaysHidden = src.alwaysHidden
         dst.mouseoverEnabled = src.mouseoverEnabled
         dst.mouseoverAlpha = src.mouseoverAlpha
+        dst.mouseoverRestAlpha = src.mouseoverRestAlpha
         dst._savedBarAlpha = src._savedBarAlpha
         dst.combatHideEnabled = src.combatHideEnabled
         dst.combatShowEnabled = src.combatShowEnabled
@@ -1877,19 +1878,25 @@ initFrame:SetScript("OnEvent", function(self)
                 region  = rgn,
                 tooltip = "Apply Bar Opacity to all Bars",
                 onClick = function()
-                    local v = SB().mouseoverAlpha or 1
+                    local cur = SB()
+                    local v = cur.mouseoverEnabled and (cur._savedBarAlpha or 1) or (cur.mouseoverAlpha or 1)
                     for _, key in ipairs(GROUP_BAR_ORDER) do
-                        EAB.db.profile.bars[key].mouseoverAlpha = v
+                        local bs = EAB.db.profile.bars[key]
+                        if bs.mouseoverEnabled then
+                            bs._savedBarAlpha = v
+                        else
+                            bs.mouseoverAlpha = v
+                        end
                         EAB:ApplyBarOpacity(key)
                     end
                     EllesmereUI:RefreshPage()
                 end,
                 isSynced = function()
                     local cur = SB()
-                    local v = cur.mouseoverEnabled and 1 or (cur.mouseoverAlpha or 1)
+                    local v = cur.mouseoverEnabled and (cur._savedBarAlpha or 1) or (cur.mouseoverAlpha or 1)
                     for _, key in ipairs(GROUP_BAR_ORDER) do
                         local bs = EAB.db.profile.bars[key]
-                        local bv = bs.mouseoverEnabled and 1 or (bs.mouseoverAlpha or 1)
+                        local bv = bs.mouseoverEnabled and (bs._savedBarAlpha or 1) or (bs.mouseoverAlpha or 1)
                         if bv ~= v then return false end
                     end
                     return true
@@ -1900,9 +1907,69 @@ initFrame:SetScript("OnEvent", function(self)
                     elementLabels = SHORT_LABELS,
                     getCurrentKey = function() return SelectedKey() end,
                     onApply       = function(checkedKeys)
-                        local v = SB().mouseoverAlpha or 1
+                        local cur = SB()
+                        local v = cur.mouseoverEnabled and (cur._savedBarAlpha or 1) or (cur.mouseoverAlpha or 1)
                         for _, key in ipairs(checkedKeys) do
-                            EAB.db.profile.bars[key].mouseoverAlpha = v
+                            local bs = EAB.db.profile.bars[key]
+                            if bs.mouseoverEnabled then
+                                bs._savedBarAlpha = v
+                            else
+                                bs.mouseoverAlpha = v
+                            end
+                            EAB:ApplyBarOpacity(key)
+                        end
+                        EllesmereUI:RefreshPage()
+                    end,
+                },
+            })
+        end
+
+        -- Resting opacity while Visibility = Mouseover. 0 reproduces the old
+        -- hidden-until-hover behaviour; anything above it dims the bar instead.
+        -- Bar Opacity above is the HOVERED alpha in this mode.
+        row, h = W:DualRow(parent, y,
+            { type="slider", text="Mouseover Rest Opacity", min=0, max=100, step=5,
+              disabled=function() return not SB().mouseoverEnabled end,
+              disabledTooltip="Mouseover",
+              tooltip="How visible the bar stays while the cursor is away. 0% hides it completely; raise it to leave a faded bar that returns to Bar Opacity on hover.",
+              getValue=function() return floor((SB().mouseoverRestAlpha or 0) * 100 + 0.5) end,
+              setValue=function(v)
+                  SSet("mouseoverRestAlpha", v / 100, function(k) EAB:ApplyBarOpacity(k) end)
+                  SUpdatePreview()
+              end },
+            { type="label", text="" });  y = y - h
+        do
+            local rgn = row._leftRegion
+            EllesmereUI.BuildSyncIcon({
+                region  = rgn,
+                tooltip = "Apply Mouseover Rest Opacityto all Bars",
+                onClick = function()
+                    local v = SB().mouseoverRestAlpha or 0
+                    for _, key in ipairs(GROUP_BAR_ORDER) do
+                        EAB.db.profile.bars[key].mouseoverRestAlpha = v
+                        EAB:ApplyBarOpacity(key)
+                    end
+                    EllesmereUI:RefreshPage()
+                end,
+                isSynced = function()
+                    local cur = SB()
+                    local v = cur.mouseoverRestAlpha or 1
+                    for _, key in ipairs(GROUP_BAR_ORDER) do
+                        local bs = EAB.db.profile.bars[key]
+                        local bv = bs.mouseoverRestAlpha or 1
+                        if bv ~= v then return false end
+                    end
+                    return true
+                end,
+                flashTargets = function() return { rgn } end,
+                multiApply = {
+                    elementKeys   = GROUP_BAR_ORDER,
+                    elementLabels = SHORT_LABELS,
+                    getCurrentKey = function() return SelectedKey() end,
+                    onApply       = function(checkedKeys)
+                        local v = SB().mouseoverRestAlpha or 0
+                        for _, key in ipairs(checkedKeys) do
+                            EAB.db.profile.bars[key].mouseoverRestAlpha = v
                             EAB:ApplyBarOpacity(key)
                         end
                         EllesmereUI:RefreshPage()
