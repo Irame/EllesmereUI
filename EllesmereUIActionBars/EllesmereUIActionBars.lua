@@ -261,17 +261,7 @@ function EAB.VisibilityCompat.ApplyMode(settings, mode)
     settings.barVisibility = mode
     settings.alwaysHidden = (mode == "never")
 
-    local wasMouseover = settings.mouseoverEnabled
     settings.mouseoverEnabled = (mode == "mouseover")
-    if mode == "mouseover" then
-        if not settings._savedBarAlpha then
-            settings._savedBarAlpha = settings.mouseoverAlpha or 1
-        end
-        settings.mouseoverAlpha = 0
-    elseif wasMouseover and settings._savedBarAlpha then
-        settings.mouseoverAlpha = settings._savedBarAlpha
-        settings._savedBarAlpha = nil
-    end
 
     settings.combatHideEnabled = (mode == "out_of_combat")
     settings.combatShowEnabled = (mode == "in_combat")
@@ -304,14 +294,8 @@ function EAB.VisibilityCompat.Copy(dst, src, dstNoGroupModes)
     local mode = EAB.VisibilityCompat.Normalize(src)
     EAB.VisibilityCompat.ApplyMode(dst, mode)
 
+    dst.barAlpha = src.barAlpha
     dst.mouseoverRestAlpha = src.mouseoverRestAlpha
-    if mode == "mouseover" then
-        dst._savedBarAlpha = src._savedBarAlpha or src.mouseoverAlpha or 1
-        dst.mouseoverAlpha = 0
-    else
-        dst.mouseoverAlpha = src.mouseoverAlpha
-        dst._savedBarAlpha = nil
-    end
 
     -- Show During Drag / Show When Spellbook Is Open travel with the copy
     -- (inert unless target mode is Never).
@@ -524,7 +508,7 @@ for _, info in ipairs(BAR_CONFIG) do
         buttonWidth = 0,
         buttonHeight = 0,
         mouseoverEnabled = false,
-        mouseoverAlpha = 1,
+        barAlpha = 1,
         mouseoverRestAlpha = 0,
         combatShowEnabled = false,
         combatHideEnabled = false,
@@ -612,7 +596,7 @@ end
 for _, info in ipairs(EXTRA_BARS) do
     defaults.profile.bars[info.key] = {
         mouseoverEnabled = false,
-        mouseoverAlpha = 1,
+        barAlpha = 1,
         mouseoverRestAlpha = 0,
         combatShowEnabled = false,
         combatHideEnabled = false,
@@ -7400,7 +7384,7 @@ function EAB:ApplyBarOpacity(barKey)
     local frame = barFrames[barKey]
     if not frame then return end
     -- In mouseover mode the hover system owns alpha (resting when unhovered,
-    -- mouseoverAlpha when hovered), so only repaint the RESTING value here, and
+    -- barAlpha when hovered), so only repaint the RESTING value here, and
     -- only while the cursor is away -- otherwise a slider drag yanks a hovered bar.
     if s.mouseoverEnabled then
         if frame:IsMouseOver() then return end
@@ -7410,8 +7394,8 @@ function EAB:ApplyBarOpacity(barKey)
         if barKey == "MainBar" then SyncPagingAlpha(resting) end
         return
     end
-    frame:SetAlpha(s.mouseoverAlpha or 1)
-    if barKey == "MainBar" then SyncPagingAlpha(s.mouseoverAlpha or 1) end
+    frame:SetAlpha(s.barAlpha or 1)
+    if barKey == "MainBar" then SyncPagingAlpha(s.barAlpha or 1) end
 end
 
 function EAB:BarSupportsOrientation(barKey)
@@ -8713,7 +8697,7 @@ end
 -- cannot land on a different verdict than the visibility refresh would. mouseoverEnabled
 -- is STATIC (true whenever mouseover is selected at all, any Match Mode), so it can only
 -- answer "is the hover mechanism wired"; VisWantsMouseover answers "is it gating now".
--- _savedBarAlpha is load-bearing: ApplyMode parks mouseoverAlpha at 0 and stashes the real
+-- _savedBarAlpha is load-bearing: ApplyMode parks barAlpha at 0 and stashes the real
 -- value there while a mouseover selection is stored, so the shown branch would paint 0.
 -- On the vtable, not a chunk local (main chunk is at the 200-local cap).
 function EAB_VTABLE.Hover.RestingAlpha(barKey, s)
@@ -8728,7 +8712,7 @@ function EAB_VTABLE.Hover.RestingAlpha(barKey, s)
     -- Rest alpha while hover-gated: 0 = classic hidden-until-hover,
     -- >0 = dimmed-until-hover. Defaults to 0 so existing profiles are unchanged.
     if wantsHover then return s.mouseoverRestAlpha or 0, true end
-    return s._savedBarAlpha or s.mouseoverAlpha or 1, false
+    return s.barAlpha or 1, false
 end
 
 -- Fade ONE bar in, no broadcast. The fadeDir memo makes repeat calls while
@@ -8738,7 +8722,7 @@ end
 function EAB_VTABLE.Hover.FadeInOne(barKey, state)
     local s = EAB_VTABLE.Hover.GetSettings(barKey)
     if s and s.mouseoverEnabled and state and state.fadeDir ~= "in" then
-        local targetAlpha = s._savedBarAlpha or 1
+        local targetAlpha = s.barAlpha or 1
         state.fadeDir = "in"
         StopFade(state.frame)
         -- `manual`: hover fades ride the shared per-frame fader so a
@@ -8988,10 +8972,10 @@ function EAB:RefreshMouseover(onlyHoverGated)
                     end
                 else
                     StopFade(frame)
-                    frame:SetAlpha(s.mouseoverAlpha or 1)
+                    frame:SetAlpha(s.barAlpha or 1)
                     local state = hoverStates[key]
                     if state then state.fadeDir = nil end
-                    if key == "MainBar" then SyncPagingAlpha(s.mouseoverAlpha or 1) end
+                    if key == "MainBar" then SyncPagingAlpha(s.barAlpha or 1) end
                 end
             end
         end
@@ -9755,7 +9739,7 @@ end
 -- local (Lua 5.1 200-local-per-chunk cap).
 do
 local MYSLOT_VIS_FIELDS = {
-    "barVisibility", "alwaysHidden", "mouseoverEnabled", "mouseoverAlpha",
+    "barVisibility", "alwaysHidden", "mouseoverEnabled", "barAlpha",
     "mouseoverRestAlpha",
     "_savedBarAlpha", "combatShowEnabled", "combatHideEnabled", "alwaysShowButtons",
     -- An applied Visibility override REPLACES the whole setting (a "never"
@@ -9843,13 +9827,13 @@ function EAB:SetMyslotForceShow(on)
                 s.alwaysHidden = false
                 s.mouseoverEnabled = false
                 -- Force FULL opacity, never the bar's real resting value: a
-                -- hidden-until-hover bar rests at mouseoverAlpha 0 (and the
+                -- hidden-until-hover bar rests at barAlpha 0 (and the
                 -- Any-engine parks it at 0 with the real value stashed), and
-                -- RefreshMouseover's disable path paints mouseoverAlpha
+                -- RefreshMouseover's disable path paints barAlpha
                 -- verbatim -- restoring the stash here re-hid the very bar
                 -- this swap exists to show. The backup holds both real
                 -- values; restore puts them back untouched.
-                s.mouseoverAlpha = 1
+                s.barAlpha = 1
                 s.mouseoverRestAlpha = nil
                 s._savedBarAlpha = nil
                 s.combatShowEnabled = false
@@ -13731,8 +13715,8 @@ function EAB:FinishSetup()
                     StopFade(frame)
                     if frame:IsMouseOver() then
                         if state then state.isHovered = true; state.fadeDir = "in" end
-                        frame:SetAlpha(s._savedBarAlpha or 1)
-                        if key == "MainBar" then SyncPagingAlpha(s._savedBarAlpha or 1) end
+                        frame:SetAlpha(s.barAlpha or 1)
+                        if key == "MainBar" then SyncPagingAlpha(s.barAlpha or 1) end
                     else
                         if state then state.isHovered = false; state.fadeDir = "out" end
                         frame:SetAlpha(0)
@@ -14056,7 +14040,7 @@ function EAB:FinishSetup()
                     -- Show mouseover-faded bars at full opacity
                     if s.mouseoverEnabled then
                         StopFade(frame)
-                        local fullAlpha = s._savedBarAlpha or 1
+                        local fullAlpha = s.barAlpha or 1
                         frame:SetAlpha(fullAlpha)
                         if state then state.fadeDir = "in" end
                         if key == "MainBar" then SyncPagingAlpha(fullAlpha) end
