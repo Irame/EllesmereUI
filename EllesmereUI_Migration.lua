@@ -1946,8 +1946,8 @@ EllesmereUI.RegisterMigration({
         qs.barVisibility      = "always"
         qs.alwaysHidden       = false
         qs.mouseoverEnabled   = false
-        qs.mouseoverAlpha     = 1
-        qs._savedBarAlpha     = nil
+        qs.barAlpha           = 1
+        qs.mouseoverRestAlpha = nil
         qs.combatHideEnabled  = false
         qs.combatShowEnabled  = false
         qs.housingHideEnabled = false
@@ -4226,3 +4226,142 @@ EllesmereUI.RegisterMigration({
         strip(ctx.profile.condOverrides)
     end,
 })
+
+--------------------------------------------------------------------------------
+--  ACTION BARS: mouseoverAlpha/_savedBarAlpha -> barAlpha + mouseoverRestAlpha
+--
+--  Pre-split storage used ONE opacity field with a mode-dependent meaning:
+--    * not mouseover -> `mouseoverAlpha` WAS Bar Opacity (0 was a real choice).
+--    * mouseover     -> ApplyMode parked `mouseoverAlpha` at 0 (the hidden-while-
+--                       resting value) and stashed the user's real Bar Opacity in
+--                       `_savedBarAlpha`.
+--  Post-split: `barAlpha` is always Bar Opacity (the HOVERED value in mouseover
+--  mode) and `mouseoverRestAlpha` is the resting value, default 0.
+--
+--  Without this, `barAlpha` reads nil for every existing profile and AceDB hands
+--  back the default 1.0 -- so everyone who ever touched Bar Opacity silently
+--  snaps back to 100%, in both modes.
+--
+--  `mouseoverRestAlpha` is deliberately NOT written: its default (0) already
+--  reproduces the old hidden-until-hover behaviour, and stored profiles are
+--  sparse by convention (AceDB merges defaults at NewDB time).
+--
+--  Four surfaces carry the old fields; all four live under ctx.profile:
+--    1. bars[<BarKey>]          -- the live per-bar settings
+--    2. _myslotVisBackup        -- persisted snapshot taken mid-Myslot-import,
+--                                  restored verbatim by RestoreMyslotBackup
+--    3. specOverrides           -- per-spec captured leaf values, keyed by fkey
+--    4. condOverrides           -- same, per condition group
+--------------------------------------------------------------------------------
+do
+    local AB_FOLDER   = "EllesmereUIActionBars"
+    -- fkey = folder .. "\31" .. path, path segments joined by "\30".
+    local OLD_FKEY_PAT = "^" .. AB_FOLDER .. "\31bars\30([^\30]+)\30mouseoverAlpha$"
+    local NEW_FKEY_FMT = AB_FOLDER .. "\31bars\30%s\30barAlpha"
+
+    -- One bar's settings table, old shape -> new shape. Exported below so the
+    -- profile IMPORT path can convert freshly pasted data in-session; the
+    -- registered migration only reaches an imported profile at the next login.
+    -- Idempotent: gated on barAlpha being absent, and it clears both old fields.
+    local function ConvertBarSettings(s)
+        if type(s) ~= "table" then return end
+        if s.barAlpha == nil then
+            local real
+            if s.mouseoverEnabled then
+                -- Mouseover was the stored mode, so mouseoverAlpha is the parked
+                -- sentinel, never an opacity the user picked. Only trust it if it
+                -- is NOT 0 (pre-parking data, or a hand-edited profile).
+                real = s._savedBarAlpha
+                if real == nil and s.mouseoverAlpha ~= 0 then
+                    real = s.mouseoverAlpha
+                end
+            else
+                -- Plain Bar Opacity, including a deliberate 0.
+                real = s.mouseoverAlpha
+            end
+            -- Sparse-profile convention: only persist a non-default.
+            if real ~= nil and real ~= 1 then s.barAlpha = real end
+        end
+        s.mouseoverAlpha = nil
+        s._savedBarAlpha = nil
+    end
+    EllesmereUI._MigrateActionBarAlphaFields = ConvertBarSettings
+
+    -- Rewrite captured override leaves in one store (specOverrides/condOverrides).
+    -- Shape: store[i].values[<variant>][fkey] = value.
+    -- `barsRoot` is the profile's live bars table, used to tell a parked 0 from a
+    -- deliberate 0 -- the stash was never capturable (no widget writes it), so a
+    -- captured 0 on a bar whose stored mode is mouseover is the sentinel and
+    -- carrying it over would bake a permanently invisible bar for that spec.
+    local function ConvertOverrideStore(store, barsRoot)
+        if type(store) ~= "table" then return end
+        for i = 1, #store do
+            local entry = store[i]
+            local values = type(entry) == "table" and entry.values
+            if type(values) == "table" then
+                for _, map in pairs(values) do
+                    if type(map) == "table" then
+                        local renames
+                        for fkey, v in pairs(map) do
+                            local barKey = fkey:match(OLD_FKEY_PAT)
+                            if barKey then
+                                renames = renames or {}
+                                renames[fkey] = { barKey, v }
+                            end
+                        end
+                        if renames then
+                            for fkey, info in pairs(renames) do
+                                local barKey, v = info[1], info[2]
+                                map[fkey] = nil
+                                local newKey = NEW_FKEY_FMT:format(barKey)
+                                if map[newKey] == nil then
+                                    local bar = type(barsRoot) == "table" and barsRoot[barKey]
+                                    local parked = (v == 0)
+                                        and type(bar) == "table"
+                                        and bar.mouseoverEnabled
+                                    -- A parked 0 carried no opinion; drop it and let
+                                    -- the profile value stand for that spec.
+                                    if not parked then map[newKey] = v end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    EllesmereUI.RegisterMigration({
+        id          = "ab_bar_alpha_split_v1",
+        scope       = "profile",
+        description = "Action Bars: split the old dual-meaning mouseoverAlpha/_savedBarAlpha pair into barAlpha (Bar Opacity, the hovered value under Mouseover) and mouseoverRestAlpha (resting value, default 0). Converts live bar settings, the persisted Myslot visibility backup, and captured spec/conditional override leaves; without it every profile that had ever changed Bar Opacity would silently reset to 100%.",
+        body = function(ctx)
+            local ab = ctx.profile.addons and ctx.profile.addons[AB_FOLDER]
+            if type(ab) ~= "table" then return end
+
+            -- Overrides read mouseoverEnabled off the live bars, so run them
+            -- BEFORE ConvertBarSettings clears anything it depends on. (It only
+            -- clears the alpha fields, but keeping the order explicit means a
+            -- later edit to ConvertBarSettings cannot quietly break this.)
+            local bars = ab.bars
+            ConvertOverrideStore(ctx.profile.specOverrides, bars)
+            ConvertOverrideStore(ctx.profile.condOverrides, bars)
+
+            if type(bars) == "table" then
+                for _, s in pairs(bars) do
+                    ConvertBarSettings(s)
+                end
+            end
+
+            -- Mid-import snapshot: restored field-for-field, so it needs the same
+            -- rename or RestoreMyslotBackup puts dead keys back and leaves every
+            -- bar forced to barAlpha 1.
+            local backup = ab._myslotVisBackup
+            if type(backup) == "table" then
+                for _, saved in pairs(backup) do
+                    ConvertBarSettings(saved)
+                end
+            end
+        end,
+    })
+end
