@@ -1349,7 +1349,9 @@ end
 --- store does not own -- spec always wins). NIL_SENT stays ENCODED in the
 --- returned map (decode against EllesmereUI.SPECOV_NIL); like the writers it is
 --- decoded conceptually BEFORE the table-type skip, so sentinel deletions
---- always resolve. Returns (flatMap fkey->value or nil, specSrc, condSrc).
+--- always resolve -- EXCEPT on defaults-backed keys, where a sentinel is harvest
+--- residue the writers skip and this resolver omits, so preview and live agree.
+--- Returns (flatMap fkey->value or nil, specSrc, condSrc).
 --- ZERO writes, no store creation, safe from any module at any time.
 function EllesmereUI.SpecOverrides_PeekEffectiveValues(folder)
     if not folder then return nil end
@@ -1359,19 +1361,29 @@ function EllesmereUI.SpecOverrides_PeekEffectiveValues(folder)
     if store and specID then
         for _, entry in ipairs(store) do
             local m = entry.values[specID] or entry.values.default
-            for fkey, def in pairs(entry.values.default) do
+            for fkey in pairs(entry.values.default) do
                 if not BlacklistedFKey(fkey) and not MatchOwnedFKey(fkey)
                    and SplitFKey(fkey) == folder then
-                    local v = m[fkey]
-                    if v == nil then v = def end
-                    if v == NIL_SENT or type(v) ~= "table" then
-                        out = out or {}
-                        out[fkey] = v
-                        if not specSrc and m ~= entry.values.default
-                           and m[fkey] ~= nil then
-                            local g = EllesmereUI.SpecOverrides_OwningGroupFor(specID)
-                            specSrc = (g and (g.name or g.label))
-                                or L("Spec Override")
+                    -- Only the current spec's OWN values belong in the overlay. Keys
+                    -- falling back to the entry default are already correct live: the
+                    -- overlay is built only in the Default view (see
+                    -- SpecOverrides_ViewActive), which is the state that holds those
+                    -- defaults live for editing -- a stored copy would shadow the
+                    -- user's edits until the next harvest.
+                    if m ~= entry.values.default and m[fkey] ~= nil then
+                        local v = m[fkey]
+                        -- Defaults-backed NIL_SENT is harvest residue the writers
+                        -- refuse (see WriteSpecValues); resolving it here would hand
+                        -- the preview a nil the live frames never hold.
+                        local nilPoison = (v == NIL_SENT) and HasRegisteredDefault(fkey)
+                        if not nilPoison and (v == NIL_SENT or type(v) ~= "table") then
+                            out = out or {}
+                            out[fkey] = v
+                            if not specSrc then
+                                local g = EllesmereUI.SpecOverrides_OwningGroupFor(specID)
+                                specSrc = (g and (g.name or g.label))
+                                    or L("Spec Override")
+                            end
                         end
                     end
                 end
@@ -1386,22 +1398,22 @@ function EllesmereUI.SpecOverrides_PeekEffectiveValues(folder)
                 and EllesmereUI.Conditions_AppliedGid() or nil
             for _, entry in ipairs(cstore) do
                 local map = gid and entry.values[gid] or nil
-                for fkey, def in pairs(entry.values.default) do
+                for fkey in pairs(entry.values.default) do
                     if not BlacklistedFKey(fkey) and not MatchOwnedFKey(fkey)
                        and not EntryOwning(fkey) and SplitFKey(fkey) == folder then
-                        local v = def
-                        local fromCond = false
+                        -- Ownership gate as above: only what the APPLIED conditional
+                        -- carries is overlaid; a default fallback is already live.
                         if map and map[fkey] ~= nil then
-                            v = map[fkey]
-                            fromCond = true
-                        end
-                        if v == NIL_SENT or type(v) ~= "table" then
-                            out = out or {}
-                            out[fkey] = v
-                            if fromCond and not condSrc then
-                                local cg = EllesmereUI.Conditions_GroupById
-                                    and EllesmereUI.Conditions_GroupById(gid)
-                                condSrc = cg and (cg.name or cg.label)
+                            local v = map[fkey]
+                            local nilPoison = (v == NIL_SENT) and HasRegisteredDefault(fkey)
+                            if not nilPoison and (v == NIL_SENT or type(v) ~= "table") then
+                                out = out or {}
+                                out[fkey] = v
+                                if not condSrc then
+                                    local cg = EllesmereUI.Conditions_GroupById
+                                        and EllesmereUI.Conditions_GroupById(gid)
+                                    condSrc = cg and (cg.name or cg.label)
+                                end
                             end
                         end
                     end
