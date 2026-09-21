@@ -430,7 +430,9 @@
         "NOT_BOUND",
         "PRESS_KEY_TO_BIND",
         "KEY_BOUND",
-        "LEVEL"
+        "LEVEL",
+        "STAT_CATEGORY_GENERAL",
+        "STAT_CATEGORY_DEFENSE"
     ],
     "Lua.runtime.version": "Lua 5.1",
     "Lua.runtime.builtin": {
